@@ -1,0 +1,18 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- Onda Branca (Wave) -->
+    <!-- Centralizada e suave como no print -->
+    <path
+        android:fillColor="@android:color/transparent"
+        android:strokeColor="@color/ic_launcher_foreground"
+        android:strokeWidth="12"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:pathData="M24,54
+                          c10,-20 20,-20 30,0
+                          s20,20 30,0"/>
+</vector>
