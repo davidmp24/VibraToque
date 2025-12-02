@@ -81,7 +81,7 @@ Botão Flutuante
 
 ![ajustes.png](images/ajustes.png)
 
-![DOWNLOAD VERSÃO ATUALIZADA] (https://github.com/davidmp24/VibraToque/releases/download/VibraToque/VibraToque.2.0.Atualizado.apk) 
+DOWNLOAD VERSÃO ATUALIZADA (https://github.com/davidmp24/VibraToque/releases/download/VibraToque/VibraToque.2.0.Atualizado.apk) 
 
 
 💻 Tecnologias Utilizadas
