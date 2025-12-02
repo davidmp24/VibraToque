@@ -1,5 +1,7 @@
 📳 VibraToque 2.0
 
+![splash.png](images/splash.png)
+
 A Revolução da Comunicação Háptica Silenciosa.
 Converta códigos digitais em sinais físicos discretos.
 
@@ -75,11 +77,12 @@ Configurações
 
 Botão Flutuante
 
-<!-- Insira aqui o link da imagem da Home -->
+![inicial.png](images/inicial.png)
 
-<!-- Insira aqui o link da imagem de Settings -->
+![ajustes.png](images/ajustes.png)
 
-<!-- Insira aqui o link da imagem do Overlay -->
+![DOWNLOAD VERSÃO ATUALIZADA] (https://github.com/davidmp24/VibraToque/releases/download/VibraToque/VibraToque.2.0.Atualizado.apk) 
+
 
 💻 Tecnologias Utilizadas
 

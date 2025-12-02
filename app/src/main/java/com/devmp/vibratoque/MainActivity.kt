@@ -86,11 +86,12 @@ data class AppConfig(
     var pulseDuration: Float = 300f,
     var pulseSpacing: Float = 300f,
     var questionSpacing: Float = 3000f,
-    var countdownTime: Float = 10000f, // NOVO: Tempo de contagem regressiva inicial (padrão 10s)
+    var countdownTime: Float = 10000f,
     var vibrationIntensity: Float = 100f,
     var forceDarkMode: Boolean = true
 )
 
+// Objeto global para compartilhar config com o Serviço (Overlay)
 object GlobalConfig {
     var config = AppConfig()
 }
@@ -107,11 +108,17 @@ class MainActivity : ComponentActivity() {
 
             var showPermissionDialog by remember { mutableStateOf(false) }
 
+            // Sincroniza configuração inicial
             LaunchedEffect(Unit) {
                 GlobalConfig.config = configState.value
                 if (checkMissingPermissions(context)) {
                     showPermissionDialog = true
                 }
+            }
+
+            // Sincroniza qualquer mudança de estado com o GlobalConfig para o Serviço ver
+            LaunchedEffect(configState.value) {
+                GlobalConfig.config = configState.value
             }
 
             val notificationLauncher = rememberLauncherForActivityResult(
@@ -145,7 +152,11 @@ class MainActivity : ComponentActivity() {
                     if (showSettingsScreen) {
                         SettingsScreen(
                             config = configState.value,
-                            onConfigChange = { newConfig -> configState.value = newConfig },
+                            onConfigChange = { newConfig ->
+                                // ATUALIZAÇÃO CRÍTICA: Atualiza o estado da UI e o Global para o Serviço
+                                configState.value = newConfig
+                                GlobalConfig.config = newConfig
+                            },
                             onBack = { showSettingsScreen = false }
                         )
                     } else {
@@ -390,7 +401,6 @@ fun SettingsScreen(
                 localConfig = localConfig.copy(questionSpacing = it); update()
             }
 
-            // --- NOVO: Contagem Regressiva Inicial ---
             ConfigSlider("Contagem Inicial", "${(localConfig.countdownTime/1000).toInt()} s", localConfig.countdownTime, 0f..30000f) {
                 localConfig = localConfig.copy(countdownTime = it); update()
             }
@@ -645,29 +655,39 @@ class MyLifecycleOwner : SavedStateRegistryOwner {
     fun performRestore(savedState: Bundle?) { savedStateRegistryController.performRestore(savedState) }
 }
 
-// --- LÓGICA DE VIBRAÇÃO MANUAL ---
+// --- LÓGICA DE VIBRAÇÃO MANUAL (AJUSTADA E BLINDADA) ---
 suspend fun vibrarManual(context: Context, config: AppConfig) {
     val vibrator = if (Build.VERSION.SDK_INT >= 31) {
         (context.getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as VibratorManager).defaultVibrator
     } else {
         @Suppress("DEPRECATION") context.getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
     }
+
     val duration = config.pulseDuration.toLong()
     val amplitude = (config.vibrationIntensity * 2.55).toInt().coerceIn(1, 255)
+
+    // Atributos de Áudio para FURAR O BLOQUEIO DA MIUI
     val audioAttributes = AudioAttributes.Builder()
         .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
-        .setUsage(AudioAttributes.USAGE_ALARM)
+        .setUsage(AudioAttributes.USAGE_ALARM) // Prioridade Máxima
         .build()
 
+    // VERIFICAÇÃO CLARA DO MODO MI BAND (GLOBAL)
     if (config.isMiBandMode) {
         val manualId = (System.currentTimeMillis() % 100000).toInt()
         enviarNotificacao(context, manualId)
     } else {
+        // Vibração física com atributos
         if (Build.VERSION.SDK_INT >= 26) {
-            val effect = if (amplitude > 240) VibrationEffect.createOneShot(duration, VibrationEffect.DEFAULT_AMPLITUDE) else VibrationEffect.createOneShot(duration, amplitude)
+            val effect = if (amplitude > 240) {
+                VibrationEffect.createOneShot(duration, VibrationEffect.DEFAULT_AMPLITUDE)
+            } else {
+                VibrationEffect.createOneShot(duration, amplitude)
+            }
             vibrator.vibrate(effect, audioAttributes)
         } else {
-            @Suppress("DEPRECATION") vibrator.vibrate(duration)
+            @Suppress("DEPRECATION")
+            vibrator.vibrate(duration)
         }
     }
 }
@@ -682,7 +702,7 @@ suspend fun processarGabarito(
 
     // 1. ALERTA INICIAL (2 toques rápidos)
     updateDisplay("ALERTA")
-    executarSinais(context, 2, config, updateStatus) // Envia 2 toques usando a config atual (MiBand ou Phone)
+    executarSinais(context, 2, config, updateStatus)
 
     // 2. CONTAGEM REGRESSIVA (Controlada pelo Slider)
     val countdownSeconds = (config.countdownTime / 1000).toInt()
@@ -722,14 +742,20 @@ suspend fun executarSinais(context: Context, pulsos: Int, config: AppConfig, upd
     for (i in 1..pulsos) {
         updateStatus(if (i > 4) 4 else i)
 
+        // VERIFICAÇÃO CLARA PARA SEQUÊNCIA
         if (config.isMiBandMode) {
             enviarNotificacao(context, i)
         } else {
             if (Build.VERSION.SDK_INT >= 26) {
-                val effect = if (amplitude > 240) VibrationEffect.createOneShot(duration, VibrationEffect.DEFAULT_AMPLITUDE) else VibrationEffect.createOneShot(duration, amplitude)
+                val effect = if (amplitude > 240) {
+                    VibrationEffect.createOneShot(duration, VibrationEffect.DEFAULT_AMPLITUDE)
+                } else {
+                    VibrationEffect.createOneShot(duration, amplitude)
+                }
                 vibrator.vibrate(effect, audioAttributes)
             } else {
-                @Suppress("DEPRECATION") vibrator.vibrate(duration)
+                @Suppress("DEPRECATION")
+                vibrator.vibrate(duration)
             }
         }
         delay(duration + config.pulseSpacing.toLong())
