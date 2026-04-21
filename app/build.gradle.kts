@@ -22,7 +22,10 @@ android {
 
     buildTypes {
         release {
-            isMinifyEnabled = false
+            // BUG FIX: isMinifyEnabled=false expõe nomes de classes e gera APK maior.
+            // R8 + ProGuard reduzem o APK e tornam a engenharia reversa mais difícil.
+            isMinifyEnabled = true
+            isShrinkResources = true
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"

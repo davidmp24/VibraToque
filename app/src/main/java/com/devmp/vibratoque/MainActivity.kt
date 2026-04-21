@@ -75,8 +75,11 @@ import androidx.savedstate.setViewTreeSavedStateRegistryOwner
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import java.util.concurrent.atomic.AtomicInteger
 import java.util.regex.Pattern
 
 // --- DADOS DE CONFIGURAÇÃO ---
@@ -92,7 +95,9 @@ data class AppConfig(
 )
 
 // Objeto global para compartilhar config com o Serviço (Overlay)
+// @Volatile garante visibilidade imediata entre threads (UI thread vs. Service thread)
 object GlobalConfig {
+    @Volatile
     var config = AppConfig()
 }
 
@@ -162,7 +167,11 @@ class MainActivity : ComponentActivity() {
                     } else {
                         HomeScreen(
                             config = configState.value,
-                            onOpenSettings = { showSettingsScreen = true }
+                            onOpenSettings = {
+                                // BUG FIX: bloco de processamento não é cancelado ao abrir Settings;
+                                // o cancelamento agora é responsabilidade da HomeScreen via DisposableEffect.
+                                showSettingsScreen = true
+                            }
                         )
                     }
 
@@ -347,7 +356,8 @@ fun SettingsScreen(
                 )
             }
 
-            Divider(color = MaterialTheme.colorScheme.surface, thickness = 1.dp, modifier = Modifier.padding(vertical = 20.dp))
+            // BUG FIX: `Divider` foi depreciado no Material3 — substituído por `HorizontalDivider`
+            HorizontalDivider(color = MaterialTheme.colorScheme.surface, thickness = 1.dp, modifier = Modifier.padding(vertical = 20.dp))
 
             Text("MOTOR DE VIBRAÇÃO", fontSize = 12.sp, color = Color.Gray, letterSpacing = 2.sp)
             Spacer(modifier = Modifier.height(10.dp))
@@ -432,6 +442,14 @@ fun HomeScreen(config: AppConfig, onOpenSettings: () -> Unit) {
 
     val scrollState = rememberScrollState()
 
+    // BUG FIX: garante que o job de transmissão seja cancelado se o Composable sair
+    // da composição (ex: usuário navega para Settings com transmissão ativa)
+    DisposableEffect(Unit) {
+        onDispose {
+            processingJob?.cancel()
+        }
+    }
+
     Box(modifier = Modifier.fillMaxSize()) {
         Column(
             modifier = Modifier
@@ -490,7 +508,11 @@ fun HomeScreen(config: AppConfig, onOpenSettings: () -> Unit) {
                     focusedTextColor = MaterialTheme.colorScheme.onBackground,
                     unfocusedTextColor = MaterialTheme.colorScheme.onBackground
                 ),
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Text, autoCorrect = false),
+                // BUG FIX: `autoCorrect` foi depreciado no BOM recente (use KeyboardCapitalization/autoCorrectEnabled)
+                keyboardOptions = KeyboardOptions(
+                    keyboardType = KeyboardType.Text,
+                    autoCorrectEnabled = false
+                ),
                 maxLines = 5
             )
 
@@ -502,7 +524,16 @@ fun HomeScreen(config: AppConfig, onOpenSettings: () -> Unit) {
                         if (!isRunning) {
                             isRunning = true
                             processingJob = scope.launch {
-                                processarGabarito(context, inputText, config, updateDisplay = { displayText = it }, updateStatus = { activeStatusIndex = it }, onFinished = { isRunning = false; displayText = "FIM"; activeStatusIndex = 0 })
+                                processarGabarito(
+                                    context, inputText, config,
+                                    updateDisplay = { displayText = it },
+                                    updateStatus = { activeStatusIndex = it },
+                                    onFinished = {
+                                        isRunning = false
+                                        displayText = "FIM"
+                                        activeStatusIndex = 0
+                                    }
+                                )
                             }
                         } else {
                             processingJob?.cancel()
@@ -562,11 +593,36 @@ class FloatingButtonService : Service() {
     private lateinit var windowManager: WindowManager
     private lateinit var overlayView: ComposeView
 
+    // BUG FIX: escopo gerenciado com SupervisorJob — cancelado em onDestroy()
+    // O código anterior criava um CoroutineScope novo a cada toque sem nunca cancelá-lo (memory leak)
+    private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+
     override fun onBind(intent: Intent): IBinder? = null
 
     override fun onCreate() {
         super.onCreate()
         windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
+
+        // BUG FIX: startForeground() é obrigatório para Services de longa duração no Android 8+.
+        // Sem isso o sistema mata o serviço após ~5 segundos em background (ANR / crash silencioso).
+        val channelId = "OVERLAY_SERVICE_CHANNEL"
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val channel = NotificationChannel(
+                channelId,
+                "Botão Flutuante",
+                NotificationManager.IMPORTANCE_MIN // sem som, sem banner
+            ).apply { setShowBadge(false) }
+            (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager)
+                .createNotificationChannel(channel)
+        }
+        val notification = NotificationCompat.Builder(this, channelId)
+            .setContentTitle("VibraToque ativo")
+            .setContentText("Botão flutuante em execução")
+            .setSmallIcon(android.R.drawable.ic_popup_reminder)
+            .setOngoing(true)
+            .setSilent(true)
+            .build()
+        startForeground(9999, notification)
 
         val params = WindowManager.LayoutParams(
             WindowManager.LayoutParams.WRAP_CONTENT,
@@ -593,8 +649,8 @@ class FloatingButtonService : Service() {
         overlayView.setContent {
             FingerprintOverlay(
                 onVibrate = {
-                    // OTOQUE DO BOTÃO FLUTUANTE CHAMA A LÓGICA MANUAL
-                    CoroutineScope(Dispatchers.Main).launch {
+                    // BUG FIX: usa o serviceScope gerenciado em vez de criar novo scope a cada toque
+                    serviceScope.launch {
                         vibrarManual(this@FloatingButtonService, GlobalConfig.config)
                     }
                 },
@@ -611,6 +667,8 @@ class FloatingButtonService : Service() {
 
     override fun onDestroy() {
         super.onDestroy()
+        // BUG FIX: cancela todas as coroutines pendentes do service para evitar leaks
+        serviceScope.cancel()
         if (::overlayView.isInitialized) {
             windowManager.removeView(overlayView)
         }
@@ -762,8 +820,14 @@ suspend fun executarSinais(context: Context, pulsos: Int, config: AppConfig, upd
     }
 }
 
+// BUG FIX: ID baseado em timestamp + id pode colidir quando pulsos são enviados rapidamente
+// (System.currentTimeMillis() pode retornar o mesmo valor em ms consecutivos).
+// Usando AtomicInteger garante IDs únicos sequenciais sem race condition.
+private val notificationCounter = AtomicInteger(1)
+
 fun enviarNotificacao(context: Context, id: Int) {
-    val uniqueNotificationId = (System.currentTimeMillis() % 100000).toInt() + id
+    // ID único e crescente; nunca colide mesmo que chamado em loop rápido
+    val uniqueNotificationId = notificationCounter.getAndIncrement()
 
     val builder = NotificationCompat.Builder(context, "MIBAND_CHANNEL")
         .setSmallIcon(android.R.drawable.ic_popup_reminder)
